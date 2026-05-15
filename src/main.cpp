@@ -167,6 +167,9 @@ int main() {
         return 1;
     }
     AudioEngine audioEngine = AudioEngine();
+    MidiHandler midiHandler = MidiHandler([&audioEngine](const juce::MidiMessage &message) {
+        audioEngine.handleMidiMessage(message);
+    });
     deviceManager.addAudioCallback(&audioEngine);
 
     bool running = true;
@@ -176,12 +179,21 @@ int main() {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             }
-            if (event.type == SDL_EVENT_KEY_DOWN) {
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 SDL_Keycode key = event.key.key;
-                if (key == SDLK_Q) { audioEngine.setFrequency(261.63); } // C4
-                if (key == SDLK_W) { audioEngine.setFrequency(293.66); } // D4
-                if (key == SDLK_E) { audioEngine.setFrequency(329.63); } // E4
-                if (key == SDLK_R) { audioEngine.setFrequency(349.23); } // F4
+                if (key == SDLK_Z) { midiHandler.call(juce::MidiMessage::noteOn(1, 60, 1.0f)); }
+                if (key == SDLK_S) { midiHandler.call(juce::MidiMessage::noteOn(1, 61, 1.0f)); }
+                if (key == SDLK_X) { midiHandler.call(juce::MidiMessage::noteOn(1, 62, 1.0f)); }
+                if (key == SDLK_D) { midiHandler.call(juce::MidiMessage::noteOn(1, 63, 1.0f)); }
+                if (key == SDLK_C) { midiHandler.call(juce::MidiMessage::noteOn(1, 64, 1.0f)); }
+            }
+            if (event.type == SDL_EVENT_KEY_UP) {
+                SDL_Keycode key = event.key.key;
+                if (key == SDLK_Z) { midiHandler.call(juce::MidiMessage::noteOff(1, 60)); }
+                if (key == SDLK_S) { midiHandler.call(juce::MidiMessage::noteOff(1, 61)); }
+                if (key == SDLK_X) { midiHandler.call(juce::MidiMessage::noteOff(1, 62)); }
+                if (key == SDLK_D) { midiHandler.call(juce::MidiMessage::noteOff(1, 63)); }
+                if (key == SDLK_C) { midiHandler.call(juce::MidiMessage::noteOff(1, 64)); }
             }
         }
 
@@ -189,6 +201,7 @@ int main() {
         SDL_GL_SwapWindow(window);
     }
 
+    midiHandler.stop(deviceManager);
     deviceManager.removeAudioCallback(&audioEngine);
     deviceManager.closeAudioDevice();
 
