@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <unordered_map>
 #include <glad/glad.h>
 #include "sdl.hpp"
 #include "audio.hpp"
@@ -39,6 +40,47 @@ int main() {
     });
     deviceManager.addAudioCallback(&audioEngine);
 
+    const std::unordered_map<SDL_Keycode, int> keyToMidiNote = {
+        { SDLK_Z, 60 },
+        { SDLK_S, 61 },
+        { SDLK_X, 62 },
+        { SDLK_D, 63 },
+        { SDLK_C, 64 },
+        { SDLK_V, 65 },
+        { SDLK_G, 66 },
+        { SDLK_B, 67 },
+        { SDLK_H, 68 },
+        { SDLK_N, 69 },
+        { SDLK_J, 70 },
+        { SDLK_M, 71 },
+        { SDLK_COMMA, 72 },
+        { SDLK_L, 73 },
+        { SDLK_PERIOD, 74 },
+        { SDLK_SEMICOLON, 75 },
+        { SDLK_SLASH, 76 },
+        { SDLK_BACKSLASH, 78 },
+        { SDLK_Q, 72 },
+        { SDLK_2, 73 },
+        { SDLK_W, 74 },
+        { SDLK_3, 75 },
+        { SDLK_E, 76 },
+        { SDLK_R, 77 },
+        { SDLK_5, 78 },
+        { SDLK_T, 79 },
+        { SDLK_6, 80 },
+        { SDLK_Y, 81 },
+        { SDLK_7, 82 },
+        { SDLK_U, 83 },
+        { SDLK_I, 84 },
+        { SDLK_9, 85 },
+        { SDLK_O, 86 },
+        { SDLK_0, 87 },
+        { SDLK_P, 88 },
+        { SDLK_LEFTBRACKET, 89 },
+        { SDLK_EQUALS, 90 },
+        { SDLK_RIGHTBRACKET, 91 }
+    };
+
     bool running = true;
     while (running) {
         SDL_Event event;
@@ -46,21 +88,15 @@ int main() {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             }
-            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-                SDL_Keycode key = event.key.key;
-                if (key == SDLK_Z) { midiHandler.call(juce::MidiMessage::noteOn(1, 60, 1.0f)); }
-                if (key == SDLK_S) { midiHandler.call(juce::MidiMessage::noteOn(1, 61, 1.0f)); }
-                if (key == SDLK_X) { midiHandler.call(juce::MidiMessage::noteOn(1, 62, 1.0f)); }
-                if (key == SDLK_D) { midiHandler.call(juce::MidiMessage::noteOn(1, 63, 1.0f)); }
-                if (key == SDLK_C) { midiHandler.call(juce::MidiMessage::noteOn(1, 64, 1.0f)); }
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                if (!event.key.repeat && keyToMidiNote.find(event.key.key) != keyToMidiNote.end()) {
+                    midiHandler.call(juce::MidiMessage::noteOn(1, keyToMidiNote.at(event.key.key), 1.0f));
+                }
             }
             if (event.type == SDL_EVENT_KEY_UP) {
-                SDL_Keycode key = event.key.key;
-                if (key == SDLK_Z) { midiHandler.call(juce::MidiMessage::noteOff(1, 60)); }
-                if (key == SDLK_S) { midiHandler.call(juce::MidiMessage::noteOff(1, 61)); }
-                if (key == SDLK_X) { midiHandler.call(juce::MidiMessage::noteOff(1, 62)); }
-                if (key == SDLK_D) { midiHandler.call(juce::MidiMessage::noteOff(1, 63)); }
-                if (key == SDLK_C) { midiHandler.call(juce::MidiMessage::noteOff(1, 64)); }
+                if (keyToMidiNote.find(event.key.key) != keyToMidiNote.end()) {
+                    midiHandler.call(juce::MidiMessage::noteOff(1, keyToMidiNote.at(event.key.key)));
+                }
             }
         }
 
