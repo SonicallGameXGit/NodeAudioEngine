@@ -153,6 +153,47 @@ A feature is complete only when:
 6. Modulation pass: envelope/LFO to oscillator/filter/gain parameters
 7. Persistence v1: save/load deterministic patch format
 
+## Roadmap Files and Tutorial Parts
+
+Roadmap markdown files are stored in the `roadmaps/` folder.
+
+For node-system implementation and tutorial progression, agents must consult these files first:
+- `roadmaps/node_system_implementation/SPECIFICATION.md` (architecture and design intent)
+- `roadmaps/node_system_implementation/GUIDE.md` (part-by-part tutorial contract, checkboxes, exit criteria)
+
+When the user references "Part 1", "Part 2", "continue", or asks for the next step:
+- Treat `roadmaps/node_system_implementation/GUIDE.md` as the source of truth for part scope and status
+- Keep explanations aligned with the requested part boundaries
+- Update part checkboxes/status notes when implementation meaningfully reaches that part
+
+## Explanatory Dialogue Style
+
+When the user asks how something works, how to implement a feature, or requests a tutorial, use this style:
+
+### What to explain
+- **Why the construct exists** — what problem it solves, why you can't proceed without it
+- **Why each field/member is there** — its role and what breaks if it's missing
+- **Why the structure/class was chosen** — why not a plain array, a global, a different type, etc.
+- **Why each function exists with these exact return types and parameters** — what those types communicate and why the signature is shaped that way
+- **Why the code is written the way it is** — tradeoffs, alternatives considered, and why this path was chosen
+
+### What NOT to explain
+- Basic C/C++ syntax and features (includes, pragma once, basic control flow, etc.)
+- Self-evident things that any C++ programmer would know at a glance
+- **Do explain** advanced or non-obvious things: template metaprogramming, atomics, memory orders, mutexes, C++17/20 features, lock-free patterns, real-time safety constraints
+
+### Format and tone
+- Use **emojis** freely to mark concepts, warnings, tips, categories
+- Use **rich markdown**: headers, bold, bullet points, nested lists, code blocks
+- Pair small focused code examples with conceptual explanation — never dump large blocks without context
+- Explain each example **after** showing it, not before
+- Keep explanation tight — no unnecessary padding, but don't skip important reasoning
+
+### Code examples
+- Examples must be **small** — one concept at a time
+- Each example should be immediately buildable or clearly a fragment
+- Prefer examples that match the actual project files and naming conventions
+
 ## Notes
 
 This file is the primary policy document for coding agents operating in this repository. If implementation details conflict with this file, update this file and the code in the same change set with a short rationale.

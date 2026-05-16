@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_devices/juce_audio_devices.h>
+#include "world.hpp"
 
 class MidiHandler : public juce::MidiInputCallback {
 private:
@@ -15,10 +16,11 @@ public:
 };
 class AudioEngine : public juce::AudioIODeviceCallback {
 private:
-    std::atomic<double> sampleRate, phaseDelta, amplitude;
+    std::atomic<double> sampleRate;
     std::atomic<uint8_t> note;
-    double phase;
 public:
+    World world;
+
     AudioEngine();
     ~AudioEngine() override;
 
