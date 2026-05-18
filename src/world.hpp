@@ -143,7 +143,7 @@ public:
         for (size_t i = 0; i < this->nodes[id]->getOutputs().size(); i++) {
             PortValue &output = this->nodes[id]->getOutputs()[i];
             if (output.getType() == DataType::AudioBuffer) {
-                AudioBuffer &audioBuffer = this->audioBuffers.emplace_back(
+                std::pair<NodeId, AudioBuffer> &audioBuffer = this->audioBuffers.emplace_back(
                     id,
                     this->maxAudioSamples.has_value() ?
                     AudioBuffer {
@@ -157,7 +157,7 @@ public:
                         .numSamples = 0
                     }
                 );
-                output.setAudioBufferValue(audioBuffer);
+                output.setAudioBufferValue(audioBuffer.second);
             }
         }
         this->executionOrder.push_back(id); // FIXME: Just a placeholder, until a proper scheduling algorithm will be implemented.
