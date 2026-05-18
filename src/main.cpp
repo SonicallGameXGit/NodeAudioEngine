@@ -84,16 +84,17 @@ int main() {
     NodeId oscillatorNodeId = audioEngine.world.spawn<OscillatorNode>();
     OscillatorNode &oscillatorNode = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorNodeId)->get());
     oscillatorNode.setShape(OscillatorShape::Triangle);
-
+    NodeId gainNodeId = audioEngine.world.spawn<GainNode>();
+    
     NodeId oscillator2NodeId = audioEngine.world.spawn<OscillatorNode>();
     OscillatorNode &oscillator2Node = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillator2NodeId)->get());
     oscillator2Node.setShape(OscillatorShape::Square);
     oscillator2Node.setAmplitude(0.3f);
-
-    NodeId gainNodeId = audioEngine.world.spawn<GainNode>();
+    audioEngine.world.connectToOutput(oscillator2NodeId, OscillatorNode::BUFFER_OUTPUT_ID);
+    
     GainNode &gainNode = static_cast<GainNode&>(audioEngine.world.getNode(gainNodeId)->get());
     gainNode.setGain(0.3f);
-
+    audioEngine.world.connectToOutput(gainNodeId, GainNode::BUFFER_OUTPUT_ID);
     audioEngine.world.connect(oscillatorNodeId, OscillatorNode::BUFFER_OUTPUT_ID, gainNodeId, GainNode::BUFFER_INPUT_ID);
 
     bool running = true;

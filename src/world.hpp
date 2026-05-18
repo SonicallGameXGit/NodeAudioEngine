@@ -17,8 +17,9 @@ union DataValue {
 struct PortValue {
 private:
     DataType type;
-    DataValue value;
-    PortValue(DataType type, const DataValue &value) : type(type), value(value) {}
+    DataValue value, defaultValue;
+    bool valueSet;
+    PortValue(DataType type, const DataValue &defaultValue) : type(type), value(), defaultValue(defaultValue), valueSet(false) {}
 public:
     ~PortValue() = default;
 
@@ -37,16 +38,41 @@ public:
     // I know it's all unsafe, but who cares lol
     void setAudioBufferValue(AudioBuffer &audioBuffer) {
         this->value.audioBufferValue = &audioBuffer;
+        this->valueSet = true;
     }
-    void setFloatValue(float value) { this->value.floatValue = value; }
-    void setEnumValue(uint8_t value) { this->value.enumValue = value; }
+    void setFloatValue(float value) {
+        this->value.floatValue = value;
+        this->valueSet = true;
+    }
+    void setEnumValue(uint8_t value) {
+        this->value.enumValue = value;
+        this->valueSet = true;
+    }
     void setAnyValue(const PortValue &other) {
         this->type = other.type;
         this->value = other.value;
+        this->valueSet = other.valueSet;
+    }
+
+    void setDefaultFloatValue(float defaultValue) {
+        this->defaultValue.floatValue = defaultValue;
+        if (!this->valueSet) {
+            this->value.floatValue = defaultValue;
+        }
+    }
+    void setDefaultEnumValue(uint8_t defaultValue) {
+        this->defaultValue.enumValue = defaultValue;
+        if (!this->valueSet) {
+            this->value.enumValue = defaultValue;
+        }
+    }
+
+    void removeValue() {
+        this->valueSet = false;
     }
 
     DataType getType() const { return this->type; }
-    const DataValue &getValue() const { return this->value; }
+    const DataValue &getValue() const { return this->valueSet ? this->value : this->defaultValue; }
 };
 
 struct ProcessContext {
@@ -73,23 +99,27 @@ struct SignalConnection {
     NodeId toNode;
     PortId toPort;
 };
+struct OutputConnection {
+    NodeId nodeId;
+    PortId portId;
+};
 
 struct World {
 private:
     std::unordered_map<NodeId, std::unique_ptr<Node>> nodes;
     std::vector<SignalConnection> connections;
-    std::vector<std::pair<NodeId, PortId>> sinkNodesPorts; // The "output" nodes that'll be summed togeter and sent to the final output buffer. It's not a required thing, but just a way to avoid useless calculations.
+    std::vector<OutputConnection> outputConnections;
     std::vector<NodeId> executionOrder; // FIXME: Just a placeholder, until a proper scheduling algorithm will be implemented.
-    std::deque<AudioBuffer> audioBuffers;
+    std::deque<std::pair<NodeId, AudioBuffer>> audioBuffers;
 
     std::optional<size_t> maxAudioSamples;
     NodeId nextNodeId;
 public:
     constexpr static float DEBUG_MAX_VOLUME = 1.0f;
 
-    World() : nodes(), connections(), sinkNodesPorts(), executionOrder(), maxAudioSamples(std::nullopt), nextNodeId(1) {}
+    World() : nodes(), connections(), outputConnections(), executionOrder(), maxAudioSamples(std::nullopt), nextNodeId(1) {}
     ~World() {
-        for (const AudioBuffer &audioBuffer : this->audioBuffers) {
+        for (const auto &[_, audioBuffer] : this->audioBuffers) {
             delete[] audioBuffer.left;
             delete[] audioBuffer.right;
         }
@@ -97,7 +127,7 @@ public:
 
     void audioDeviceAboutToStart(size_t maxAudioSamples) {
         this->maxAudioSamples.emplace(maxAudioSamples);
-        for (AudioBuffer &audioBuffer : this->audioBuffers) {
+        for (auto &[_, audioBuffer] : this->audioBuffers) {
             delete[] audioBuffer.left;
             delete[] audioBuffer.right;
             audioBuffer.left = new float[maxAudioSamples];
@@ -110,16 +140,17 @@ public:
     NodeId spawn(Args &&...args) {
         NodeId id = this->nextNodeId++;
         this->nodes[id] = std::make_unique<T>(std::forward<Args>(args)...);
-        size_t sinkNodePort = 0;
         for (size_t i = 0; i < this->nodes[id]->getOutputs().size(); i++) {
             PortValue &output = this->nodes[id]->getOutputs()[i];
             if (output.getType() == DataType::AudioBuffer) {
-                AudioBuffer &audioBuffer = this->audioBuffers.emplace_back(this->maxAudioSamples.has_value() ?
-                AudioBuffer {
-                    .left = new float[this->maxAudioSamples.value()],
-                    .right = new float[this->maxAudioSamples.value()],
-                    .numSamples = this->maxAudioSamples.value()
-                } :
+                AudioBuffer &audioBuffer = this->audioBuffers.emplace_back(
+                    id,
+                    this->maxAudioSamples.has_value() ?
+                    AudioBuffer {
+                        .left = new float[this->maxAudioSamples.value()],
+                        .right = new float[this->maxAudioSamples.value()],
+                        .numSamples = this->maxAudioSamples.value()
+                    } :
                     AudioBuffer {
                         .left = nullptr,
                         .right = nullptr,
@@ -127,12 +158,44 @@ public:
                     }
                 );
                 output.setAudioBufferValue(audioBuffer);
-                if (sinkNodePort == 0) { sinkNodePort = i + 1; }
             }
         }
-        if (sinkNodePort > 0) { this->sinkNodesPorts.emplace_back(id, sinkNodePort - 1); }
         this->executionOrder.push_back(id); // FIXME: Just a placeholder, until a proper scheduling algorithm will be implemented.
         return id;
+    }
+    bool destroy(NodeId id) {
+        const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator nodeIt = this->nodes.find(id);
+        if (nodeIt == this->nodes.end()) { return false; }
+
+        std::vector<SignalConnection>::iterator removeIt = std::remove_if(this->connections.begin(), this->connections.end(), [id](const SignalConnection &connection) {
+            return connection.fromNode == id || connection.toNode == id;
+        });
+        for (std::vector<SignalConnection>::iterator it = removeIt; it != this->connections.end(); ++it) {
+            std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator toIt = this->nodes.find(it->toNode);
+            if (toIt != this->nodes.end() && it->toPort < toIt->second->getInputs().size()) {
+                PortValue &input = toIt->second->getInputs()[it->toPort];
+                if (input.getType() == DataType::AudioBuffer) {
+                    input.removeValue();
+                }
+            }
+        }
+        this->connections.erase(removeIt, this->connections.end());
+        this->outputConnections.erase(std::remove_if(this->outputConnections.begin(), this->outputConnections.end(), [&](const OutputConnection &connection) {
+            return connection.nodeId == id;
+        }), this->outputConnections.end());
+
+        this->audioBuffers.erase(std::remove_if(this->audioBuffers.begin(), this->audioBuffers.end(), [&](const std::pair<NodeId, AudioBuffer> &pair) {
+            bool remove = pair.first == id;
+            if (remove) {
+                delete[] pair.second.left;
+                delete[] pair.second.right;
+            }
+            return remove;
+        }), this->audioBuffers.end());
+
+        this->executionOrder.erase(std::remove(this->executionOrder.begin(), this->executionOrder.end(), id), this->executionOrder.end());
+        this->nodes.erase(nodeIt);
+        return true;
     }
 
     bool connect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
@@ -147,6 +210,12 @@ public:
         if (toPort >= toInputs.size()) { return false; }
         if (fromOutputs[fromPort].getType() != toInputs[toPort].getType()) { return false; }
 
+        if (std::find_if(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
+            return connection.toNode == toNode && connection.toPort == toPort;
+        }) != this->connections.end()) {
+            return false; // Port is already connected to something else (or possibly this case itself, lol).
+        }
+
         this->connections.emplace_back(SignalConnection {
             .fromNode = fromNode,
             .fromPort = fromPort,
@@ -154,11 +223,48 @@ public:
             .toPort = toPort,
         });
 
-        // If the from node was a sink node and it's first audio buffer (always the sink one by default) is now forwarded to the next node, then it should be removed from the sink list.
-        this->sinkNodesPorts.erase(std::remove_if(this->sinkNodesPorts.begin(), this->sinkNodesPorts.end(), [fromNode, fromPort](const std::pair<NodeId, PortId> &sinkNodePort) {
-            return sinkNodePort.first == fromNode && sinkNodePort.second == fromPort;
-        }), this->sinkNodesPorts.end());
+        return true;
+    }
+    bool disconnect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
+        // Here could be ton of checks, like in the connect function, but who cares, when we just disconnect nodes' ports? No matter if they exist. Nothing is being allocated and if they really don't exist, there's no way there'd be a connection.
+        const std::vector<SignalConnection>::iterator connectionIt = std::find_if(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
+            return connection.fromNode == fromNode && connection.fromPort == fromPort && connection.toNode == toNode && connection.toPort == toPort;
+        });
+        if (connectionIt == this->connections.end()) { return false; }
 
+        std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator toIt = this->nodes.find(toNode);
+        if (toIt != this->nodes.end() && toPort < toIt->second->getInputs().size()) {
+            toIt->second->getInputs()[toPort].removeValue();
+        }
+
+        this->connections.erase(connectionIt);
+        return true;
+    }
+    bool connectToOutput(NodeId fromNode, PortId fromPort) {
+        const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator fromIt = this->nodes.find(fromNode);
+        if (fromIt == this->nodes.end()) { return false; }
+        const std::vector<PortValue> &fromOutputs = fromIt->second->getOutputs();
+        if (fromPort >= fromOutputs.size()) { return false; }
+        if (fromOutputs[fromPort].getType() != DataType::AudioBuffer) { return false; }
+        if (std::find_if(this->outputConnections.begin(), this->outputConnections.end(), [&](const OutputConnection &connection) {
+            return connection.nodeId == fromNode && connection.portId == fromPort;
+        }) != this->outputConnections.end()) {
+            return false; // Port is already connected to output.
+        }
+
+        this->outputConnections.emplace_back(OutputConnection {
+            .nodeId = fromNode,
+            .portId = fromPort,
+        });
+
+        return true;
+    }
+    bool disconnectFromOutput(NodeId fromNode, PortId fromPort) {
+        const std::vector<OutputConnection>::iterator connectionIt = std::find_if(this->outputConnections.begin(), this->outputConnections.end(), [&](const OutputConnection &connection) {
+            return connection.nodeId == fromNode && connection.portId == fromPort;
+        });
+        if (connectionIt == this->outputConnections.end()) { return false; }
+        this->outputConnections.erase(connectionIt);
         return true;
     }
 
@@ -181,9 +287,9 @@ public:
             }
             node.process(context); // FIXME: Potentially unsafe.
         }
-        for (const auto &[sinkNodeId, sinkPortId] : this->sinkNodesPorts) {
-            Node &node = *this->nodes.at(sinkNodeId); // FIXME: Potentially unsafe.
-            const AudioBuffer *audioBuffer = node.getOutputs()[sinkPortId].getValue().audioBufferValue;
+        for (const OutputConnection &outputConnection : this->outputConnections) {
+            Node &node = *this->nodes.at(outputConnection.nodeId); // FIXME: Potentially unsafe.
+            const AudioBuffer *audioBuffer = node.getOutputs()[outputConnection.portId].getValue().audioBufferValue;
             if (
                 audioBuffer == nullptr ||
                 audioBuffer->left == nullptr || audioBuffer->right == nullptr ||
