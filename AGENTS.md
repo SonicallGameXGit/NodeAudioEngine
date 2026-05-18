@@ -186,8 +186,11 @@ When the user asks how something works, how to implement a feature, or requests 
 - Use **emojis** freely to mark concepts, warnings, tips, categories
 - Use **rich markdown**: headers, bold, bullet points, nested lists, code blocks
 - Pair small focused code examples with conceptual explanation — never dump large blocks without context
+- Always include at least one small code example in every explanation or tutorial response
 - Explain each example **after** showing it, not before
 - Keep explanation tight — no unnecessary padding, but don't skip important reasoning
+- Prefer more small code examples for each concept; keep each example short and directly tied to the explanation
+- When asked for a tutorial or implementation guidance, include concrete code samples for key functions (e.g., connection validation and `connect` API), not just struct definitions
 
 ### Code examples
 - Examples must be **small** — one concept at a time

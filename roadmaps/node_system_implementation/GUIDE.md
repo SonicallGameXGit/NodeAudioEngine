@@ -84,7 +84,31 @@ Current direct device writes from multiple nodes cause last-writer-wins behavior
 - Two oscillators can be heard simultaneously as a mix
 - Output is deterministic for same patch and same parameter state
 
-## Part 4 - Execution Graph and Plan Rebuild (DAG) [ ]
+## Part 4 - Output/Mixer Block (Implicit Sink) [ ]
+
+### Goal
+Replace ad-hoc sink node lists with a single built-in output/mixer block that every world owns.
+
+### Why this part exists
+Explicit sinks are a temporary bridge. A dedicated output/mixer block gives a stable, predictable target for all audio outputs and makes mixing behavior consistent and visible in the graph model.
+
+### Required scope
+- Add a built-in Output/Mixer block that is always present in `World`
+- It accepts only `AudioBuffer` connections
+- Any `AudioBuffer` connected to it is summed into the final device output
+- Remove or ignore `sinkNodes` in favor of this block
+- Mixing order is deterministic (stable ordering of connections)
+
+### Constraints
+- Output/Mixer block is not a `Node`
+- It must never be deleted
+- It must not allocate in the audio callback
+
+### Exit criteria
+- Two oscillators routed into the Output/Mixer block are audible together
+- No ad-hoc sink list is required for correct mixing
+
+## Part 5 - Execution Graph and Plan Rebuild (DAG) [ ]
 
 ### Goal
 Separate edit-time graph validation/planning from real-time block execution.
@@ -107,7 +131,7 @@ A scalable node engine cannot recompute arbitrary graph behavior in the audio ca
 - Valid graphs execute strictly in planned topological order
 - Audio callback does not perform expensive graph analysis
 
-## Part 5 - Input Requirements and Port Validation [ ]
+## Part 6 - Input Requirements and Port Validation [ ]
 
 ### Goal
 Make graph contracts explicit with required vs optional inputs and defaults.
@@ -125,7 +149,7 @@ Nodes need predictable behavior when inputs are disconnected. This part prevents
 - Missing required inputs make the plan invalid with explicit reason
 - Optional inputs always resolve to deterministic runtime values
 
-## Part 6 - MIDI/Event State Bridge [ ]
+## Part 7 - MIDI/Event State Bridge [ ]
 
 ### Goal
 Provide a stable path from MIDI/event ingestion to DSP nodes.
@@ -146,7 +170,7 @@ Musical interaction requires note/gate/mod sources that are globally visible but
 - MIDI note on/off changes audible output through node graph
 - Behavior is deterministic and thread-safe under rapid input
 
-## Part 7 - Preallocation and Real-Time Hardening [ ]
+## Part 8 - Preallocation and Real-Time Hardening [ ]
 
 ### Goal
 Eliminate runtime allocations and hidden unbounded work from audio processing.
@@ -163,7 +187,7 @@ Dropout-resistant audio requires strict real-time discipline, especially as grap
 - No allocations or locks on audio callback path
 - Stable playback under larger graph sizes
 
-## Part 8 - Persistence v1 and Schema Safety [ ]
+## Part 9 - Persistence v1 and Schema Safety [ ]
 
 ### Goal
 Persist and restore patches deterministically.
@@ -180,7 +204,7 @@ Without persistence, graph editing has no production value. Deterministic serial
 - Save then load reproduces equivalent graph and behavior
 - Version handling is explicit and testable
 
-## Part 9 - Modulation System (Control + Audio Rate) [ ]
+## Part 10 - Modulation System (Control + Audio Rate) [ ]
 
 ### Goal
 Enable arbitrary modulation routing to parameter endpoints.

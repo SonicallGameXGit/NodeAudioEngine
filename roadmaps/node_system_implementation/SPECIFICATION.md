@@ -39,6 +39,14 @@ An `ExecutionEdge` represents an execution dependency between two nodes:
 ### **5. World**
 The `World` is the central manager of the graph. It owns all nodes, connections, and execution edges. It validates the graph, builds execution plans, and processes audio blocks.
 
+### **6. Output/Mixer Block**
+The Output/Mixer block is a built-in graph endpoint owned by `World`.
+- It is not a `Node`
+- It is always present and cannot be deleted
+- It accepts only `AudioBuffer` connections
+- Every connected `AudioBuffer` is summed into the final device output
+- Mixing order must be deterministic (stable ordering of connections)
+
 ---
 
 ## Detailed Design
@@ -126,8 +134,8 @@ struct ExecutionEdge {
    - Build topological execution order.
    - Pre-allocate buffers for all nodes.
 5. **Audio Processing**
-   - Process nodes layer by layer.
-   - Sum sink nodes into final output.
+    - Process nodes layer by layer.
+    - Sum all `AudioBuffer` connections into the Output/Mixer block.
 
 #### API
 ```cpp
@@ -181,10 +189,10 @@ public:
    - Build topological execution order.
    - Precompute routing tables.
 3. **Process Block**
-   - Clear buffers for current block.
-   - Execute nodes layer by layer.
-   - Route outputs to inputs using SignalConnections.
-   - Sum sink node outputs into device output.
+    - Clear buffers for current block.
+    - Execute nodes layer by layer.
+    - Route outputs to inputs using SignalConnections.
+    - Sum Output/Mixer block inputs into device output.
 
 ---
 

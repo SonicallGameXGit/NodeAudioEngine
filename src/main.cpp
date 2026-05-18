@@ -84,7 +84,17 @@ int main() {
     NodeId oscillatorNodeId = audioEngine.world.spawn<OscillatorNode>();
     OscillatorNode &oscillatorNode = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorNodeId)->get());
     oscillatorNode.setShape(OscillatorShape::Triangle);
-    oscillatorNode.setAmplitude(0.15f);
+
+    NodeId oscillator2NodeId = audioEngine.world.spawn<OscillatorNode>();
+    OscillatorNode &oscillator2Node = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillator2NodeId)->get());
+    oscillator2Node.setShape(OscillatorShape::Square);
+    oscillator2Node.setAmplitude(0.3f);
+
+    NodeId gainNodeId = audioEngine.world.spawn<GainNode>();
+    GainNode &gainNode = static_cast<GainNode&>(audioEngine.world.getNode(gainNodeId)->get());
+    gainNode.setGain(0.3f);
+
+    audioEngine.world.connect(oscillatorNodeId, OscillatorNode::BUFFER_OUTPUT_ID, gainNodeId, GainNode::BUFFER_INPUT_ID);
 
     bool running = true;
     while (running) {
@@ -106,7 +116,9 @@ int main() {
         }
 
         oscillatorNode.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::sinf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
+        oscillator2Node.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::cosf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
         oscillatorNode.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::sinf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
+        oscillator2Node.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::cosf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
 
         glClear(GL_COLOR_BUFFER_BIT);
         SDL_GL_SwapWindow(window);

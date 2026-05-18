@@ -25,6 +25,7 @@ AudioEngine::~AudioEngine() = default;
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice *device) {
     if (device == nullptr) { return; }
     this->sampleRate.store(device->getCurrentSampleRate(), std::memory_order_release);
+    this->world.audioDeviceAboutToStart(static_cast<size_t>(device->getCurrentBufferSizeSamples()));
 }
 void AudioEngine::audioDeviceStopped() {
     this->sampleRate.store(0.0, std::memory_order_release);
@@ -37,12 +38,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     int numSamples,
     const juce::AudioIODeviceCallbackContext &context
 ) {
-    this->world.process(ProcessContext {
-        .buffer = output,
-        .numChannels = numOutputs,
-        .numSamples = numSamples,
-        .sampleRate = this->sampleRate.load(std::memory_order_acquire)
-    });
+    this->world.process(output, numOutputs, numSamples, this->sampleRate.load(std::memory_order_acquire));
 }
 void AudioEngine::handleMidiMessage(const juce::MidiMessage &message) {
     // if (message.isNoteOn()) {
