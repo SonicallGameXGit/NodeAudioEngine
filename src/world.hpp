@@ -104,20 +104,69 @@ struct OutputConnection {
     PortId portId;
 };
 
+struct RegularResult {
+    bool success;
+    std::string errorMessage;
+};
+struct TopologicalOrderComputeResult {
+    std::vector<NodeId> order;
+    bool valid;
+    std::string errorMessage;
+};
+
 struct World {
 private:
     std::unordered_map<NodeId, std::unique_ptr<Node>> nodes;
     std::vector<SignalConnection> connections;
     std::vector<OutputConnection> outputConnections;
-    std::vector<NodeId> executionOrder; // FIXME: Just a placeholder, until a proper scheduling algorithm will be implemented.
     std::deque<std::pair<NodeId, AudioBuffer>> audioBuffers;
+    std::optional<TopologicalOrderComputeResult> cachedTopologicalOrder;
 
     std::optional<size_t> maxAudioSamples;
     NodeId nextNodeId;
+
+    // Kahn's algorithm
+    TopologicalOrderComputeResult computeTopologicalOrder() const {
+        // Map each node to it's in-degree.
+        std::unordered_map<NodeId, size_t> inDegree = std::unordered_map<NodeId, size_t>();
+        for (const auto &[nodeId, _] : this->nodes) { inDegree[nodeId] = 0; }
+        // Build adjacency list and calculate in-degrees.
+        std::unordered_map<NodeId, std::vector<NodeId>> adjacency = std::unordered_map<NodeId, std::vector<NodeId>>();
+        for (const SignalConnection &connection : this->connections) {
+            adjacency[connection.fromNode].push_back(connection.toNode);
+            inDegree[connection.toNode]++;
+        }
+
+        // Initialize queue with only nodes that have in-degree of 0 (nodes with no dependencies).
+        std::deque<NodeId> queue = std::deque<NodeId>();
+        for (const auto &[nodeId, degree] : inDegree) {
+            if (degree == 0) { queue.push_back(nodeId); }
+        }
+
+        // Iterate trough each node in the queue, add it to the result and decrease in-degree of it's neighbors (if any of the neighbors has in-degree of 0, add it to the queue).
+        std::vector<NodeId> result = std::vector<NodeId>();
+        while (!queue.empty()) {
+            NodeId nodeId = queue.front();
+            queue.pop_front();
+            result.push_back(nodeId);
+            for (NodeId neighbor : adjacency[nodeId]) {
+                inDegree[neighbor]--;
+                if (inDegree[neighbor] == 0) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        // Nodes get to result only if they have in-degree of 0, but if there's a loop - they'll never have in-degree of 0 and in the result list there'd be less nodes than in the world.
+        if (result.size() != this->nodes.size()) {
+            return TopologicalOrderComputeResult { .order = std::vector<NodeId>(), .valid = false, .errorMessage = "Cycle detected in the graph" };
+        }
+        return TopologicalOrderComputeResult { .order = result, .valid = true, .errorMessage = std::string() };
+    }
 public:
     constexpr static float DEBUG_MAX_VOLUME = 1.0f;
 
-    World() : nodes(), connections(), outputConnections(), executionOrder(), maxAudioSamples(std::nullopt), nextNodeId(1) {}
+    World() : nodes(), connections(), outputConnections(), audioBuffers(), cachedTopologicalOrder(std::nullopt), maxAudioSamples(std::nullopt), nextNodeId(1) {}
     ~World() {
         for (const auto &[_, audioBuffer] : this->audioBuffers) {
             delete[] audioBuffer.left;
@@ -160,12 +209,20 @@ public:
                 output.setAudioBufferValue(audioBuffer.second);
             }
         }
-        this->executionOrder.push_back(id); // FIXME: Just a placeholder, until a proper scheduling algorithm will be implemented.
+        if (!this->cachedTopologicalOrder.has_value()) {
+            this->cachedTopologicalOrder.emplace(TopologicalOrderComputeResult {
+                .order = std::vector<NodeId> { id },
+                .valid = true,
+                .errorMessage = std::string(),
+            });
+        } else { this->cachedTopologicalOrder->order.push_back(id); }
         return id;
     }
-    bool destroy(NodeId id) {
+    RegularResult destroy(NodeId id) {
         const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator nodeIt = this->nodes.find(id);
-        if (nodeIt == this->nodes.end()) { return false; }
+        if (nodeIt == this->nodes.end()) {
+            return RegularResult { .success = false, .errorMessage = "Node not found" };
+        }
 
         std::vector<SignalConnection>::iterator removeIt = std::remove_if(this->connections.begin(), this->connections.end(), [id](const SignalConnection &connection) {
             return connection.fromNode == id || connection.toNode == id;
@@ -193,27 +250,38 @@ public:
             return remove;
         }), this->audioBuffers.end());
 
-        this->executionOrder.erase(std::remove(this->executionOrder.begin(), this->executionOrder.end(), id), this->executionOrder.end());
         this->nodes.erase(nodeIt);
-        return true;
+        this->cachedTopologicalOrder.emplace(this->computeTopologicalOrder());
+        return RegularResult { .success = true, .errorMessage = std::string() };
     }
 
-    bool connect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
+    RegularResult connect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
+        printf("Trying to connect: %u:%u -> %u:%u\n", fromNode, fromPort, toNode, toPort);
         const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator fromIt = this->nodes.find(fromNode);
-        if (fromIt == this->nodes.end()) { return false; }
+        if (fromIt == this->nodes.end()) {
+            return RegularResult { .success = false, .errorMessage = "From node not found" };
+        }
         const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator toIt = this->nodes.find(toNode);
-        if (toIt == this->nodes.end()) { return false; }
+        if (toIt == this->nodes.end()) {
+            return RegularResult { .success = false, .errorMessage = "To node not found" };
+        }
 
         const std::vector<PortValue> &fromOutputs = fromIt->second->getOutputs();
-        if (fromPort >= fromOutputs.size()) { return false; }
+        if (fromPort >= fromOutputs.size()) {
+            return RegularResult { .success = false, .errorMessage = "From port not found" };
+        }
         const std::vector<PortValue> &toInputs = toIt->second->getInputs();
-        if (toPort >= toInputs.size()) { return false; }
-        if (fromOutputs[fromPort].getType() != toInputs[toPort].getType()) { return false; }
+        if (toPort >= toInputs.size()) {
+            return RegularResult { .success = false, .errorMessage = "To port not found" };
+        }
+        if (fromOutputs[fromPort].getType() != toInputs[toPort].getType()) {
+            return RegularResult { .success = false, .errorMessage = "Port types do not match" };
+        }
 
         if (std::find_if(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
             return connection.toNode == toNode && connection.toPort == toPort;
         }) != this->connections.end()) {
-            return false; // Port is already connected to something else (or possibly this case itself, lol).
+            return RegularResult { .success = false, .errorMessage = "Port is already connected to something else" }; 
         }
 
         this->connections.emplace_back(SignalConnection {
@@ -223,14 +291,22 @@ public:
             .toPort = toPort,
         });
 
-        return true;
+        TopologicalOrderComputeResult newTopologicalOrder = this->computeTopologicalOrder();
+        if (!newTopologicalOrder.valid) {
+            this->connections.pop_back();
+            return RegularResult { .success = false, .errorMessage = "Connection would create a cycle in the graph" };
+        }
+        this->cachedTopologicalOrder.emplace(newTopologicalOrder);
+        return RegularResult { .success = true, .errorMessage = std::string() };
     }
-    bool disconnect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
+    RegularResult disconnect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
         // Here could be ton of checks, like in the connect function, but who cares, when we just disconnect nodes' ports? No matter if they exist. Nothing is being allocated and if they really don't exist, there's no way there'd be a connection.
         const std::vector<SignalConnection>::iterator connectionIt = std::find_if(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
             return connection.fromNode == fromNode && connection.fromPort == fromPort && connection.toNode == toNode && connection.toPort == toPort;
         });
-        if (connectionIt == this->connections.end()) { return false; }
+        if (connectionIt == this->connections.end()) {
+            return RegularResult { .success = false, .errorMessage = "Connection not found" };
+        }
 
         std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator toIt = this->nodes.find(toNode);
         if (toIt != this->nodes.end() && toPort < toIt->second->getInputs().size()) {
@@ -238,34 +314,42 @@ public:
         }
 
         this->connections.erase(connectionIt);
-        return true;
+        this->cachedTopologicalOrder.emplace(this->computeTopologicalOrder());
+        return RegularResult { .success = true, .errorMessage = std::string() };
     }
-    bool connectToOutput(NodeId fromNode, PortId fromPort) {
+    RegularResult connectToOutput(NodeId fromNode, PortId fromPort) {
         const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator fromIt = this->nodes.find(fromNode);
-        if (fromIt == this->nodes.end()) { return false; }
+        if (fromIt == this->nodes.end()) {
+            return RegularResult { .success = false, .errorMessage = "From node not found" };
+        }
         const std::vector<PortValue> &fromOutputs = fromIt->second->getOutputs();
-        if (fromPort >= fromOutputs.size()) { return false; }
-        if (fromOutputs[fromPort].getType() != DataType::AudioBuffer) { return false; }
+        if (fromPort >= fromOutputs.size()) {
+            return RegularResult { .success = false, .errorMessage = "From port not found" };
+        }
+        if (fromOutputs[fromPort].getType() != DataType::AudioBuffer) {
+            return RegularResult { .success = false, .errorMessage = "Invalid port type" };
+        }
         if (std::find_if(this->outputConnections.begin(), this->outputConnections.end(), [&](const OutputConnection &connection) {
             return connection.nodeId == fromNode && connection.portId == fromPort;
         }) != this->outputConnections.end()) {
-            return false; // Port is already connected to output.
+            return RegularResult { .success = false, .errorMessage = "Port is already connected to output" }; // Port is already connected to output.
         }
 
         this->outputConnections.emplace_back(OutputConnection {
             .nodeId = fromNode,
             .portId = fromPort,
         });
-
-        return true;
+        return RegularResult { .success = true, .errorMessage = std::string() };
     }
-    bool disconnectFromOutput(NodeId fromNode, PortId fromPort) {
+    RegularResult disconnectFromOutput(NodeId fromNode, PortId fromPort) {
         const std::vector<OutputConnection>::iterator connectionIt = std::find_if(this->outputConnections.begin(), this->outputConnections.end(), [&](const OutputConnection &connection) {
             return connection.nodeId == fromNode && connection.portId == fromPort;
         });
-        if (connectionIt == this->outputConnections.end()) { return false; }
+        if (connectionIt == this->outputConnections.end()) {
+            return RegularResult { .success = false, .errorMessage = "Connection not found" };
+        }
         this->outputConnections.erase(connectionIt);
-        return true;
+        return RegularResult { .success = true, .errorMessage = std::string() };
     }
 
     void process(float *const *buffer, int numChannels, int numSamples, double sampleRate) {
@@ -277,18 +361,34 @@ public:
             std::fill(buffer[channel], buffer[channel] + static_cast<size_t>(numSamples), 0.0f);
         }
 
-        for (const NodeId nodeId : this->executionOrder) {
-            Node &node = *this->nodes.at(nodeId); // FIXME: Potentially unsafe.
+        if (!this->cachedTopologicalOrder.has_value()) { return; }
+        if (!this->cachedTopologicalOrder->valid) { return; }
+        for (const NodeId fromNodeId : this->cachedTopologicalOrder->order) {
+            // Trallalello
+            if (this->nodes.find(fromNodeId) == this->nodes.end()) { continue; }
+            Node &fromNode = *this->nodes.at(fromNodeId);
+            fromNode.process(context);
+
             for (const SignalConnection &connection : this->connections) {
-                if (connection.toNode != nodeId) { continue; }
-                Node &fromNode = *this->nodes.at(connection.fromNode); // FIXME: Potentially unsafe.
-                const PortValue &fromValue = fromNode.getOutputs()[connection.fromPort];
-                node.getInputs()[connection.toPort].setAnyValue(fromValue); // FIXME: Potentially unsafe.
+                // Trallalla
+                if (connection.fromNode != fromNodeId) { continue; }
+                // Porco Dio e
+                if (fromNode.getOutputs().size() <= connection.fromPort) { continue; }
+
+                // Porco Allah
+                if (this->nodes.find(connection.toNode) == this->nodes.end()) { continue; }
+                Node &toNode = *this->nodes.at(connection.toNode);
+
+                // Ero con il mio fottuto figlio merdardo a giocare a Fortnite
+                if (toNode.getInputs().size() <= connection.toPort) { continue; }
+                toNode.getInputs()[connection.toPort].setAnyValue(fromNode.getOutputs()[connection.fromPort]);
             }
-            node.process(context); // FIXME: Potentially unsafe.
         }
         for (const OutputConnection &outputConnection : this->outputConnections) {
-            Node &node = *this->nodes.at(outputConnection.nodeId); // FIXME: Potentially unsafe.
+            if (this->nodes.find(outputConnection.nodeId) == this->nodes.end()) { continue; }
+            Node &node = *this->nodes.at(outputConnection.nodeId);
+
+            if (node.getOutputs().size() <= outputConnection.portId) { continue; }
             const AudioBuffer *audioBuffer = node.getOutputs()[outputConnection.portId].getValue().audioBufferValue;
             if (
                 audioBuffer == nullptr ||

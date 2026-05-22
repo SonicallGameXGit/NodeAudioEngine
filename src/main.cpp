@@ -1,9 +1,14 @@
-#include <cstdio>
-#include <unordered_map>
 #include <glad/glad.h>
 #include "sdl.hpp"
 #include "audio.hpp"
 #include "world.hpp"
+
+inline double calculateNoteFrequency(int n) { return 440.0 * std::pow(2.0, static_cast<double>(n) / 12.0); }
+
+struct Note {
+    int a4Offset;
+    float velocity;
+};
 
 int main() {
     SDLContext sdlContext = SDLContext();
@@ -81,21 +86,55 @@ int main() {
         { SDLK_RIGHTBRACKET, 91 }
     };
 
-    NodeId oscillatorNodeId = audioEngine.world.spawn<OscillatorNode>();
-    OscillatorNode &oscillatorNode = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorNodeId)->get());
-    oscillatorNode.setShape(OscillatorShape::Triangle);
-    NodeId gainNodeId = audioEngine.world.spawn<GainNode>();
+    NodeId oscillatorsIds[3] = {
+        audioEngine.world.spawn<OscillatorNode>(),
+        audioEngine.world.spawn<OscillatorNode>(),
+        audioEngine.world.spawn<OscillatorNode>()
+    };
+    OscillatorNode *oscillators[3] = {
+        &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[0])->get()),
+        &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[1])->get()),
+        &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[2])->get())
+    };
+    for (size_t i = 0; i < 3; i++) {
+        OscillatorNode &oscillator = static_cast<OscillatorNode&>(*oscillators[i]);
+        oscillator.setShape(OscillatorShape::Sawtooth);
+        oscillator.setAmplitude(0.15f);
+        audioEngine.world.connectToOutput(oscillatorsIds[i], OscillatorNode::BUFFER_OUTPUT_ID);
+    }
+
+
+    Note progression[16][3] = {
+        { Note { .a4Offset = -16, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -4, .velocity = 1.0f }, Note { .a4Offset = -1, .velocity = 1.0f }, Note { .a4Offset = 3, .velocity = 1.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -9, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -6, .velocity = 1.0f }, Note { .a4Offset = -1, .velocity = 1.0f }, Note { .a4Offset = 1, .velocity = 1.0f } },
+        { Note { .a4Offset = -18, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset = -16, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -4, .velocity = 1.0f }, Note { .a4Offset = -1, .velocity = 1.0f }, Note { .a4Offset = 3, .velocity = 1.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -8, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+        { Note { .a4Offset =  -6, .velocity = 1.0f }, Note { .a4Offset = -2, .velocity = 1.0f }, Note { .a4Offset = 1, .velocity = 1.0f } },
+        { Note { .a4Offset =   0, .velocity = 0.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },
+    };
+
+    // NodeId gainNodeId = audioEngine.world.spawn<GainNode>();
     
-    NodeId oscillator2NodeId = audioEngine.world.spawn<OscillatorNode>();
-    OscillatorNode &oscillator2Node = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillator2NodeId)->get());
-    oscillator2Node.setShape(OscillatorShape::Square);
-    oscillator2Node.setAmplitude(0.3f);
-    audioEngine.world.connectToOutput(oscillator2NodeId, OscillatorNode::BUFFER_OUTPUT_ID);
+    // NodeId oscillator2NodeId = audioEngine.world.spawn<OscillatorNode>();
+    // OscillatorNode &oscillator2Node = static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillator2NodeId)->get());
+    // oscillator2Node.setShape(OscillatorShape::Square);
+    // oscillator2Node.setAmplitude(0.3f);
+    // audioEngine.world.connectToOutput(oscillator2NodeId, OscillatorNode::BUFFER_OUTPUT_ID);
     
-    GainNode &gainNode = static_cast<GainNode&>(audioEngine.world.getNode(gainNodeId)->get());
-    gainNode.setGain(0.3f);
-    audioEngine.world.connectToOutput(gainNodeId, GainNode::BUFFER_OUTPUT_ID);
-    audioEngine.world.connect(oscillatorNodeId, OscillatorNode::BUFFER_OUTPUT_ID, gainNodeId, GainNode::BUFFER_INPUT_ID);
+    // GainNode &gainNode = static_cast<GainNode&>(audioEngine.world.getNode(gainNodeId)->get());
+    // gainNode.setGain(0.3f);
+    // audioEngine.world.connectToOutput(gainNodeId, GainNode::BUFFER_OUTPUT_ID);
+    // audioEngine.world.connect(oscillatorNodeId, OscillatorNode::BUFFER_OUTPUT_ID, gainNodeId, GainNode::BUFFER_INPUT_ID);
 
     bool running = true;
     while (running) {
@@ -116,10 +155,17 @@ int main() {
             }
         }
 
-        oscillatorNode.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::sinf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
-        oscillator2Node.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::cosf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
-        oscillatorNode.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::sinf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
-        oscillator2Node.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::cosf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
+        const uint32_t time = SDL_GetTicks();
+        const Note (&currentNotes)[3] = progression[(time / 250) % 16];
+        for (size_t i = 0; i < 3; i++) {
+            oscillators[i]->setFrequency(calculateNoteFrequency(currentNotes[i].a4Offset));
+            oscillators[i]->setAmplitude(currentNotes[i].velocity * 0.15f);
+        }
+
+        // oscillatorNode.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::sinf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
+        // oscillator2Node.setFrequency(440.0f * std::pow(2.0f, (std::floor(std::powf(std::cosf(SDL_GetTicks() * 0.001f) * 0.5f + 0.5f, 2.0f) * 3.0f) * 2.0f - 24.0f) / 12.0f));
+        // oscillatorNode.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::sinf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
+        // oscillator2Node.setShape(static_cast<OscillatorShape>(static_cast<uint8_t>((std::cosf(SDL_GetTicks() * 0.0025f) * 0.5f + 0.5f) * 3.99f)));
 
         glClear(GL_COLOR_BUFFER_BIT);
         SDL_GL_SwapWindow(window);
