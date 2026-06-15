@@ -91,18 +91,43 @@ int main() {
         audioEngine.world.spawn<OscillatorNode>(),
         audioEngine.world.spawn<OscillatorNode>()
     };
+    NodeId delaysIds[3] = {
+        audioEngine.world.spawn<DelayNode>(),
+        audioEngine.world.spawn<DelayNode>(),
+        audioEngine.world.spawn<DelayNode>()
+    };
+    NodeId reverbsIds[3] = {
+        audioEngine.world.spawn<ReverbNode>(),
+        audioEngine.world.spawn<ReverbNode>(),
+        audioEngine.world.spawn<ReverbNode>()
+    };
     OscillatorNode *oscillators[3] = {
         &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[0])->get()),
         &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[1])->get()),
         &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[2])->get())
     };
+    DelayNode *delays[3] = {
+        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[0])->get()),
+        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[1])->get()),
+        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[2])->get())
+    };
+    ReverbNode *reverbs[3] = {
+        &static_cast<ReverbNode&>(audioEngine.world.getNode(reverbsIds[0])->get()),
+        &static_cast<ReverbNode&>(audioEngine.world.getNode(reverbsIds[1])->get()),
+        &static_cast<ReverbNode&>(audioEngine.world.getNode(reverbsIds[2])->get())
+    };
     for (size_t i = 0; i < 3; i++) {
         OscillatorNode &oscillator = static_cast<OscillatorNode&>(*oscillators[i]);
-        oscillator.setShape(OscillatorShape::Sawtooth);
+        oscillator.setShape(OscillatorShape::HalfSquare);
         oscillator.setAmplitude(0.15f);
-        audioEngine.world.connectToOutput(oscillatorsIds[i], OscillatorNode::BUFFER_OUTPUT_ID);
+        delays[i]->setTime(0.3333333f * 0.5f);
+        delays[i]->setMix(0.4f);
+        reverbs[i]->setRoomSize(0.8f);
+        reverbs[i]->setMix(0.25f);
+        audioEngine.world.connect(oscillatorsIds[i], OscillatorNode::BUFFER_OUTPUT_ID, delaysIds[i], DelayNode::BUFFER_INPUT_ID);
+        audioEngine.world.connect(delaysIds[i], DelayNode::BUFFER_OUTPUT_ID, reverbsIds[i], ReverbNode::BUFFER_INPUT_ID);
+        audioEngine.world.connectToOutput(reverbsIds[i], ReverbNode::BUFFER_OUTPUT_ID);
     }
-
 
     Note progression[16][3] = {
         { Note { .a4Offset = -16, .velocity = 1.0f }, Note { .a4Offset =  0, .velocity = 0.0f }, Note { .a4Offset = 0, .velocity = 0.0f } },

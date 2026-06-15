@@ -1,4 +1,5 @@
 #pragma once
+#include <juce_dsp/juce_dsp.h>
 
 enum class DataType : uint8_t {
     AudioBuffer,
@@ -8,6 +9,8 @@ enum class DataType : uint8_t {
 struct AudioBuffer {
     float *left, *right;
     size_t numSamples;
+
+    bool isValid(size_t numUsedSamples) const { return this->left != nullptr && this->right != nullptr && this->numSamples >= numUsedSamples; }
 };
 union DataValue {
     AudioBuffer *audioBufferValue;
@@ -155,6 +158,8 @@ private:
     std::optional<size_t> maxAudioSamples;
     NodeId nextNodeId;
 
+    // FIXME: It counts literally all nodes, even the ones that are not affecting the output and shouldn't be processed at all.
+    //  - Find a way to either use it inside the computeTopologicalOrder function call, or based on it's results, to ensure only the used nodes are processed.
     std::optional<GraphState::UnsatisfiedNode> findFirstUnsatisfiedRequiredInput() const {
         for (const auto &[nodeId, node] : this->nodes) {
             const std::vector<PortValue> &inputs = node->getInputs();
@@ -495,6 +500,7 @@ public:
 enum class OscillatorShape : uint8_t {
     Sine,
     Square,
+    HalfSquare,
     Triangle,
     Sawtooth,
 };
@@ -504,23 +510,19 @@ private:
 public:
     constexpr static PortId FREQUENCY_INPUT_ID = 0;
     constexpr static PortId AMPLITUDE_INPUT_ID = 1;
-    constexpr static PortId SHAPE_INPUT_ID = 2;
-    constexpr static PortId BUFFER_OUTPUT_ID = 0;
+    constexpr static PortId SHAPE_INPUT_ID     = 2;
+    constexpr static PortId BUFFER_OUTPUT_ID   = 0;
 
     OscillatorNode() : Node(), phase(0.0f) {
-        this->inputs.push_back(PortValue::floatValue(440.0f, false)); // Frequency
-        this->inputs.push_back(PortValue::floatValue(1.0f, false)); // Amplitude
+        this->inputs.push_back(PortValue::floatValue(440.0f, false));                                     // Frequency
+        this->inputs.push_back(PortValue::floatValue(1.0f, false));                                       // Amplitude
         this->inputs.push_back(PortValue::enumValue(static_cast<uint8_t>(OscillatorShape::Sine), false)); // Shape
-        this->outputs.push_back(PortValue::audioBufferValue());
+        this->outputs.push_back(PortValue::audioBufferValue());                                           // Output
     }
     ~OscillatorNode() override = default;
     void process(const ProcessContext &context) override {
         const AudioBuffer *outputBuffer = this->outputs[OscillatorNode::BUFFER_OUTPUT_ID].getValue().audioBufferValue;
-        if (
-            outputBuffer == nullptr ||
-            outputBuffer->left == nullptr || outputBuffer->right == nullptr ||
-            outputBuffer->numSamples == 0 || context.numSamples > outputBuffer->numSamples
-        ) { return; }
+        if (outputBuffer == nullptr || !outputBuffer->isValid(context.numSamples)) { return; }
 
         const float phaseDelta = juce::MathConstants<double>::twoPi * this->inputs[OscillatorNode::FREQUENCY_INPUT_ID].getValue().floatValue / context.sampleRate;
         for (int j = 0; j < context.numSamples; j++) {
@@ -531,6 +533,9 @@ public:
                     break;
                 case OscillatorShape::Square:
                     sample = (std::sin(this->phase) >= 0.0f ? 1.0f : -1.0f);
+                    break;
+                case OscillatorShape::HalfSquare:
+                    sample = (this->phase < juce::MathConstants<float>::pi * 0.5f ? 1.0f : -1.0f);
                     break;
                 case OscillatorShape::Triangle:
                     sample = (2.0f / juce::MathConstants<float>::pi) * std::asin(std::sin(this->phase));
@@ -549,30 +554,28 @@ public:
         }
     }
 
-    void setFrequency(float frequency) { this->inputs[FREQUENCY_INPUT_ID].setFloatValue(frequency); }
-    void setAmplitude(float amplitude) { this->inputs[AMPLITUDE_INPUT_ID].setFloatValue(amplitude); }
-    void setShape(OscillatorShape shape) { this->inputs[SHAPE_INPUT_ID].setEnumValue(static_cast<uint8_t>(shape)); }
+    void setFrequency(float frequency) { this->inputs[OscillatorNode::FREQUENCY_INPUT_ID].setFloatValue(frequency); }
+    void setAmplitude(float amplitude) { this->inputs[OscillatorNode::AMPLITUDE_INPUT_ID].setFloatValue(amplitude); }
+    void setShape(OscillatorShape shape) { this->inputs[OscillatorNode::SHAPE_INPUT_ID].setEnumValue(static_cast<uint8_t>(shape)); }
 };
 class GainNode : public Node {
 public:
-    constexpr static PortId BUFFER_INPUT_ID = 0;
-    constexpr static PortId GAIN_INPUT_ID = 1;
+    constexpr static PortId BUFFER_INPUT_ID  = 0;
+    constexpr static PortId GAIN_INPUT_ID    = 1;
     constexpr static PortId BUFFER_OUTPUT_ID = 0;
 
     GainNode() : Node() {
-        this->inputs.push_back(PortValue::audioBufferValue()); // Input
+        this->inputs.push_back(PortValue::audioBufferValue());      // Input
         this->inputs.push_back(PortValue::floatValue(1.0f, false)); // Gain
-        this->outputs.push_back(PortValue::audioBufferValue());
+        this->outputs.push_back(PortValue::audioBufferValue());     // Output
     }
     ~GainNode() override = default;
     void process(const ProcessContext &context) override {
         const AudioBuffer *inputBuffer = this->inputs[GainNode::BUFFER_INPUT_ID].getValue().audioBufferValue;
         const AudioBuffer *outputBuffer = this->outputs[GainNode::BUFFER_OUTPUT_ID].getValue().audioBufferValue;
         if (
-            inputBuffer == nullptr || inputBuffer->left == nullptr || inputBuffer->right == nullptr ||
-            outputBuffer == nullptr || outputBuffer->left == nullptr || outputBuffer->right == nullptr ||
-            inputBuffer->numSamples == 0 || outputBuffer->numSamples == 0 ||
-            context.numSamples > inputBuffer->numSamples || context.numSamples > outputBuffer->numSamples
+            inputBuffer == nullptr || outputBuffer == nullptr ||
+            !inputBuffer->isValid(context.numSamples) || !outputBuffer->isValid(context.numSamples)
         ) { return; }
 
         for (int j = 0; j < context.numSamples; j++) {
@@ -581,4 +584,140 @@ public:
         }
     }
     void setGain(float gain) { this->inputs[GainNode::GAIN_INPUT_ID].setFloatValue(gain); }
+};
+class DelayNode : public Node {
+private:
+    juce::dsp::DelayLine<float> delayLine;
+    bool prepared;
+public:
+    constexpr static PortId BUFFER_INPUT_ID   = 0;
+    constexpr static PortId TIME_INPUT_ID     = 1;
+    constexpr static PortId FEEDBACK_INPUT_ID = 2;
+    constexpr static PortId MIX_INPUT_ID      = 3;
+    constexpr static PortId BUFFER_OUTPUT_ID  = 0;
+
+    DelayNode() : Node(), delayLine(), prepared(false) {
+        this->inputs.push_back(PortValue::audioBufferValue());      // Input
+        this->inputs.push_back(PortValue::floatValue(0.5f, false)); // Time (seconds)
+        this->inputs.push_back(PortValue::floatValue(0.3f, false)); // Feedback
+        this->inputs.push_back(PortValue::floatValue(0.5f, false)); // Mix
+        this->outputs.push_back(PortValue::audioBufferValue());     // Output
+    }
+    ~DelayNode() override = default;
+
+    void process(const ProcessContext &context) override {
+        const AudioBuffer *inputBuffer = this->inputs[DelayNode::BUFFER_INPUT_ID].getValue().audioBufferValue;
+        const AudioBuffer *outputBuffer = this->outputs[DelayNode::BUFFER_OUTPUT_ID].getValue().audioBufferValue;
+        if (
+            inputBuffer == nullptr || outputBuffer == nullptr ||
+            !inputBuffer->isValid(context.numSamples) || !outputBuffer->isValid(context.numSamples)
+        ) { return; }
+
+        // Lazy prepare: first call sets up the delay line with max 2s delay
+        if (!this->prepared) {
+            this->delayLine.prepare(juce::dsp::ProcessSpec {
+                .sampleRate = context.sampleRate,
+                .maximumBlockSize = static_cast<juce::uint32>(context.numSamples),
+                .numChannels = 2,
+            });
+            this->delayLine.setMaximumDelayInSamples(static_cast<int>(context.sampleRate * 2.0));
+            this->delayLine.reset();
+            this->prepared = true;
+        }
+
+        const float rawDelay = this->inputs[DelayNode::TIME_INPUT_ID].getValue().floatValue;
+        const float delaySamples = std::clamp(
+            rawDelay * static_cast<float>(context.sampleRate), 1.0f,
+            static_cast<float>(this->delayLine.getMaximumDelayInSamples())
+        );
+        const float feedback = std::clamp(this->inputs[DelayNode::FEEDBACK_INPUT_ID].getValue().floatValue, 0.0f, 1.0f);
+        const float mix = std::clamp(this->inputs[DelayNode::MIX_INPUT_ID].getValue().floatValue, 0.0f, 1.0f);
+
+        for (size_t i = 0; i < context.numSamples; i++) {
+            const float dryL = inputBuffer->left[i];
+            const float dryR = inputBuffer->right[i];
+
+            // Read from delay line
+            float delayedL = this->delayLine.popSample(0, delaySamples);
+            float delayedR = this->delayLine.popSample(1, delaySamples);
+
+            // Push dry + feedback into the delay line
+            this->delayLine.pushSample(0, dryL + delayedL * feedback);
+            this->delayLine.pushSample(1, dryR + delayedR * feedback);
+
+            // Wet/dry mix
+            outputBuffer->left[i] = dryL * (1.0f - mix) + delayedL * mix;
+            outputBuffer->right[i] = dryR * (1.0f - mix) + delayedR * mix;
+        }
+    }
+
+    void setTime(float time) { this->inputs[DelayNode::TIME_INPUT_ID].setFloatValue(time); }
+    void setFeedback(float feedback) { this->inputs[DelayNode::FEEDBACK_INPUT_ID].setFloatValue(feedback); }
+    void setMix(float mix) { this->inputs[DelayNode::MIX_INPUT_ID].setFloatValue(mix); }
+};
+class ReverbNode : public Node {
+private:
+    juce::Reverb reverb;
+    juce::Reverb::Parameters lastParams;
+    bool prepared;
+public:
+    constexpr static PortId BUFFER_INPUT_ID    = 0;
+    constexpr static PortId ROOM_SIZE_INPUT_ID = 1;
+    constexpr static PortId DAMPING_INPUT_ID   = 2;
+    constexpr static PortId MIX_INPUT_ID       = 3;
+    constexpr static PortId BUFFER_OUTPUT_ID   = 0;
+
+    ReverbNode() : Node(), reverb(), lastParams(), prepared(false) {
+        this->inputs.push_back(PortValue::audioBufferValue());       // Input
+        this->inputs.push_back(PortValue::floatValue(0.5f, false));  // Room Size
+        this->inputs.push_back(PortValue::floatValue(0.5f, false));  // Damping
+        this->inputs.push_back(PortValue::floatValue(0.33f, false)); // Mix
+        this->outputs.push_back(PortValue::audioBufferValue());      // Output
+
+        this->lastParams.roomSize  = 0.5f;
+        this->lastParams.damping   = 0.5f;
+        this->lastParams.wetLevel  = 0.5f;
+        this->lastParams.dryLevel  = 0.5f;
+        this->lastParams.width     = 1.0f;
+        this->lastParams.freezeMode = 0.0f;
+    }
+    ~ReverbNode() override = default;
+
+    void process(const ProcessContext &context) override {
+        const AudioBuffer *inputBuffer = this->inputs[ReverbNode::BUFFER_INPUT_ID].getValue().audioBufferValue;
+        const AudioBuffer *outputBuffer = this->outputs[ReverbNode::BUFFER_OUTPUT_ID].getValue().audioBufferValue;
+        if (
+            inputBuffer == nullptr || outputBuffer == nullptr ||
+            !inputBuffer->isValid(context.numSamples) || !outputBuffer->isValid(context.numSamples)
+        ) { return; }
+
+        if (!this->prepared) {
+            this->reverb.setSampleRate(context.sampleRate);
+            this->reverb.reset();
+            this->prepared = true;
+        }
+
+        // Copy input to output first (processStereo reads & writes in-place)
+        std::copy(inputBuffer->left, inputBuffer->left + context.numSamples, outputBuffer->left);
+        std::copy(inputBuffer->right, inputBuffer->right + context.numSamples, outputBuffer->right);
+
+        // Update params if changed
+        juce::Reverb::Parameters params;
+        params.roomSize = std::clamp(this->inputs[ReverbNode::ROOM_SIZE_INPUT_ID].getValue().floatValue, 0.0f, 1.0f);
+        params.damping = std::clamp(this->inputs[ReverbNode::DAMPING_INPUT_ID].getValue().floatValue, 0.0f, 1.0f);
+        const float mix = std::clamp(this->inputs[ReverbNode::MIX_INPUT_ID].getValue().floatValue, 0.0f, 1.0f);
+        params.wetLevel = mix;
+        params.dryLevel = 1.0f - mix;
+        params.width = 1.0f;
+        params.freezeMode = 0.0f;
+
+        if (std::memcmp(&params, &this->lastParams, sizeof(params)) != 0) {
+            this->reverb.setParameters(params);
+            this->lastParams = params;
+        }
+        this->reverb.processStereo(outputBuffer->left, outputBuffer->right, static_cast<int>(context.numSamples));
+    }
+    void setRoomSize(float size) { this->inputs[ReverbNode::ROOM_SIZE_INPUT_ID].setFloatValue(size); }
+    void setDamping(float damping) { this->inputs[ReverbNode::DAMPING_INPUT_ID].setFloatValue(damping); }
+    void setMix(float mix) { this->inputs[ReverbNode::MIX_INPUT_ID].setFloatValue(mix); }
 };

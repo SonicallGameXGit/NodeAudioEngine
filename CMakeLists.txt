@@ -31,6 +31,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     GLAD
     juce::juce_audio_devices    # Talk to sound cards (ASIO, CoreAudio)
     juce::juce_audio_basics     # Sine waves, buffers, ADSR logic
+    juce::juce_dsp              # DSP algorithms (FFT, filters, etc.)
     juce::juce_events           # Required for JUCE's internal threading
 )
 
