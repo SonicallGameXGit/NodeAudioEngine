@@ -14,25 +14,27 @@ union DataValue {
     float floatValue;
     uint8_t enumValue;
 };
+// FIXME: That's the perfect time to start using std::variant!
+// FIXME: BRO, SPLIT THE PORT VALUE INTO InputPortSpecs AND OutputPortSpecs AND USE THEM ONCE IN THE NODE TYPE SETUP AND BASED ON THEM JUST GENERATE THE PortValue, THAT'S IT!
 struct PortValue {
 private:
     DataType type;
     DataValue value, defaultValue;
-    bool valueSet;
-    PortValue(DataType type, const DataValue &defaultValue) : type(type), value(), defaultValue(defaultValue), valueSet(false) {}
+    bool required, valueSet;
+    PortValue(DataType type, const DataValue &defaultValue, bool required) : type(type), value(), defaultValue(defaultValue), required(required), valueSet(false) {}
 public:
     ~PortValue() = default;
 
     static PortValue audioBufferValue() {
         return PortValue(DataType::AudioBuffer, DataValue {
             .audioBufferValue = nullptr,
-        });
+        }, true); // AudioBuffer ports are always required, because there's no intuitive default value for them.
     }
-    static PortValue floatValue(float defaultValue) {
-        return PortValue(DataType::Float, DataValue { .floatValue = defaultValue });
+    static PortValue floatValue(float defaultValue, bool required) {
+        return PortValue(DataType::Float, DataValue { .floatValue = defaultValue }, required);
     }
-    static PortValue enumValue(uint8_t defaultValue) {
-        return PortValue(DataType::Enum, DataValue { .enumValue = defaultValue });
+    static PortValue enumValue(uint8_t defaultValue, bool required) {
+        return PortValue(DataType::Enum, DataValue { .enumValue = defaultValue }, required);
     }
 
     // I know it's all unsafe, but who cares lol
@@ -71,6 +73,7 @@ public:
         this->valueSet = false;
     }
 
+    bool isRequired() const { return this->required; }
     DataType getType() const { return this->type; }
     const DataValue &getValue() const { return this->valueSet ? this->value : this->defaultValue; }
 };
@@ -113,6 +116,32 @@ struct TopologicalOrderComputeResult {
     bool valid;
     std::string errorMessage;
 };
+struct GraphState {
+    struct UnsatisfiedNode {
+        enum class PortAt : uint8_t { Input, Output };
+        NodeId nodeId;
+        std::optional<PortId> portId;
+        PortAt portAt;
+    };
+    bool valid;
+    std::string errorMessage;
+    std::optional<UnsatisfiedNode> unsatisfiedNode;
+
+    static GraphState validState() {
+        return GraphState {
+            .valid = true,
+            .errorMessage = std::string(),
+            .unsatisfiedNode = std::nullopt,
+        };
+    }
+    static GraphState invalidState(const std::string &errorMessage, const std::optional<UnsatisfiedNode> &unsatisfiedNode) {
+        return GraphState {
+            .valid = false,
+            .errorMessage = errorMessage,
+            .unsatisfiedNode = unsatisfiedNode,
+        };
+    }
+};
 
 struct World {
 private:
@@ -120,10 +149,25 @@ private:
     std::vector<SignalConnection> connections;
     std::vector<OutputConnection> outputConnections;
     std::deque<std::pair<NodeId, AudioBuffer>> audioBuffers;
-    std::optional<TopologicalOrderComputeResult> cachedTopologicalOrder;
+    std::optional<std::vector<NodeId>> cachedTopologicalOrder;
+    GraphState cachedGraphState = GraphState::validState();
 
     std::optional<size_t> maxAudioSamples;
     NodeId nextNodeId;
+
+    std::optional<GraphState::UnsatisfiedNode> findFirstUnsatisfiedRequiredInput() const {
+        for (const auto &[nodeId, node] : this->nodes) {
+            const std::vector<PortValue> &inputs = node->getInputs();
+            for (PortId i = 0; i < static_cast<PortId>(inputs.size()); i++) {
+                if (!inputs[i].isRequired()) { continue; }
+
+                if (!std::any_of(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
+                    return connection.toNode == nodeId && connection.toPort == i;
+                })) { return GraphState::UnsatisfiedNode { .nodeId = nodeId, .portId = i, .portAt = GraphState::UnsatisfiedNode::PortAt::Input }; }
+            }
+        }
+        return std::nullopt;
+    }
 
     // Kahn's algorithm
     TopologicalOrderComputeResult computeTopologicalOrder() const {
@@ -210,12 +254,14 @@ public:
             }
         }
         if (!this->cachedTopologicalOrder.has_value()) {
-            this->cachedTopologicalOrder.emplace(TopologicalOrderComputeResult {
-                .order = std::vector<NodeId> { id },
-                .valid = true,
-                .errorMessage = std::string(),
-            });
-        } else { this->cachedTopologicalOrder->order.push_back(id); }
+            this->cachedTopologicalOrder.emplace(std::vector<NodeId> { id });
+        } else { this->cachedTopologicalOrder->push_back(id); }
+        if (this->cachedGraphState.valid) {
+            std::optional<GraphState::UnsatisfiedNode> unsatisfiedNode = this->findFirstUnsatisfiedRequiredInput();
+            if (unsatisfiedNode.has_value()) {
+                this->cachedGraphState = GraphState::invalidState("Node has unsatisfied required inputs", unsatisfiedNode);
+            }
+        }
         return id;
     }
     RegularResult destroy(NodeId id) {
@@ -230,10 +276,7 @@ public:
         for (std::vector<SignalConnection>::iterator it = removeIt; it != this->connections.end(); ++it) {
             std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator toIt = this->nodes.find(it->toNode);
             if (toIt != this->nodes.end() && it->toPort < toIt->second->getInputs().size()) {
-                PortValue &input = toIt->second->getInputs()[it->toPort];
-                if (input.getType() == DataType::AudioBuffer) {
-                    input.removeValue();
-                }
+                toIt->second->getInputs()[it->toPort].removeValue();
             }
         }
         this->connections.erase(removeIt, this->connections.end());
@@ -251,12 +294,23 @@ public:
         }), this->audioBuffers.end());
 
         this->nodes.erase(nodeIt);
-        this->cachedTopologicalOrder.emplace(this->computeTopologicalOrder());
+        TopologicalOrderComputeResult newTopologicalOrder = this->computeTopologicalOrder();
+        if (!newTopologicalOrder.valid) {
+            this->cachedTopologicalOrder.reset();
+            this->cachedGraphState = GraphState::invalidState(newTopologicalOrder.errorMessage, std::nullopt);
+            return RegularResult { .success = false, .errorMessage = newTopologicalOrder.errorMessage };
+        }
+        this->cachedTopologicalOrder.emplace(std::move(newTopologicalOrder.order));
+        std::optional<GraphState::UnsatisfiedNode> unsatisfiedNode = this->findFirstUnsatisfiedRequiredInput();
+        if (unsatisfiedNode.has_value()) {
+            this->cachedGraphState = GraphState::invalidState("Node has unsatisfied required inputs", unsatisfiedNode);
+            return RegularResult { .success = false, .errorMessage = "Node has unsatisfied required inputs" };
+        }
+        this->cachedGraphState = GraphState::validState();
         return RegularResult { .success = true, .errorMessage = std::string() };
     }
 
     RegularResult connect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
-        printf("Trying to connect: %u:%u -> %u:%u\n", fromNode, fromPort, toNode, toPort);
         const std::unordered_map<NodeId, std::unique_ptr<Node>>::iterator fromIt = this->nodes.find(fromNode);
         if (fromIt == this->nodes.end()) {
             return RegularResult { .success = false, .errorMessage = "From node not found" };
@@ -281,7 +335,7 @@ public:
         if (std::find_if(this->connections.begin(), this->connections.end(), [&](const SignalConnection &connection) {
             return connection.toNode == toNode && connection.toPort == toPort;
         }) != this->connections.end()) {
-            return RegularResult { .success = false, .errorMessage = "Port is already connected to something else" }; 
+            return RegularResult { .success = false, .errorMessage = "Port is already connected to something else" };
         }
 
         this->connections.emplace_back(SignalConnection {
@@ -294,9 +348,15 @@ public:
         TopologicalOrderComputeResult newTopologicalOrder = this->computeTopologicalOrder();
         if (!newTopologicalOrder.valid) {
             this->connections.pop_back();
-            return RegularResult { .success = false, .errorMessage = "Connection would create a cycle in the graph" };
+            return RegularResult { .success = false, .errorMessage = "Connection would create an invalid graph" };
         }
-        this->cachedTopologicalOrder.emplace(newTopologicalOrder);
+        this->cachedTopologicalOrder.emplace(std::move(newTopologicalOrder.order));
+        std::optional<GraphState::UnsatisfiedNode> unsatisfiedNode = this->findFirstUnsatisfiedRequiredInput();
+        if (unsatisfiedNode.has_value()) {
+            this->cachedGraphState = GraphState::invalidState("Node has unsatisfied required inputs", unsatisfiedNode);
+            return RegularResult { .success = false, .errorMessage = "Node has unsatisfied required inputs" };
+        }
+        this->cachedGraphState = GraphState::validState();
         return RegularResult { .success = true, .errorMessage = std::string() };
     }
     RegularResult disconnect(NodeId fromNode, PortId fromPort, NodeId toNode, PortId toPort) {
@@ -314,7 +374,18 @@ public:
         }
 
         this->connections.erase(connectionIt);
-        this->cachedTopologicalOrder.emplace(this->computeTopologicalOrder());
+        TopologicalOrderComputeResult newTopologicalOrder = this->computeTopologicalOrder();
+        if (!newTopologicalOrder.valid) {
+            this->cachedGraphState = GraphState::invalidState("Graph is in invalid state after disconnection", std::nullopt);
+            return RegularResult { .success = false, .errorMessage = "Graph is in invalid state after disconnection" };
+        }
+        this->cachedTopologicalOrder.emplace(std::move(newTopologicalOrder.order));
+        std::optional<GraphState::UnsatisfiedNode> unsatisfiedNode = this->findFirstUnsatisfiedRequiredInput();
+        if (unsatisfiedNode.has_value()) {
+            this->cachedGraphState = GraphState::invalidState("Node has unsatisfied required inputs", unsatisfiedNode);
+            return RegularResult { .success = false, .errorMessage = "Node has unsatisfied required inputs" };
+        }
+        this->cachedGraphState = GraphState::validState();
         return RegularResult { .success = true, .errorMessage = std::string() };
     }
     RegularResult connectToOutput(NodeId fromNode, PortId fromPort) {
@@ -362,8 +433,8 @@ public:
         }
 
         if (!this->cachedTopologicalOrder.has_value()) { return; }
-        if (!this->cachedTopologicalOrder->valid) { return; }
-        for (const NodeId fromNodeId : this->cachedTopologicalOrder->order) {
+        if (!this->cachedGraphState.valid) { return; }
+        for (const NodeId fromNodeId : this->cachedTopologicalOrder.value()) {
             // Trallalello
             if (this->nodes.find(fromNodeId) == this->nodes.end()) { continue; }
             Node &fromNode = *this->nodes.at(fromNodeId);
@@ -418,6 +489,7 @@ public:
         if (it != this->nodes.end()) { return std::ref(*(it->second)); }
         return std::nullopt;
     }
+    const GraphState &getGraphState() const { return this->cachedGraphState; }
 };
 
 enum class OscillatorShape : uint8_t {
@@ -436,9 +508,9 @@ public:
     constexpr static PortId BUFFER_OUTPUT_ID = 0;
 
     OscillatorNode() : Node(), phase(0.0f) {
-        this->inputs.push_back(PortValue::floatValue(440.0f)); // Frequency
-        this->inputs.push_back(PortValue::floatValue(1.0f)); // Amplitude
-        this->inputs.push_back(PortValue::enumValue(static_cast<uint8_t>(OscillatorShape::Sine))); // Shape
+        this->inputs.push_back(PortValue::floatValue(440.0f, false)); // Frequency
+        this->inputs.push_back(PortValue::floatValue(1.0f, false)); // Amplitude
+        this->inputs.push_back(PortValue::enumValue(static_cast<uint8_t>(OscillatorShape::Sine), false)); // Shape
         this->outputs.push_back(PortValue::audioBufferValue());
     }
     ~OscillatorNode() override = default;
@@ -489,7 +561,7 @@ public:
 
     GainNode() : Node() {
         this->inputs.push_back(PortValue::audioBufferValue()); // Input
-        this->inputs.push_back(PortValue::floatValue(1.0f)); // Gain
+        this->inputs.push_back(PortValue::floatValue(1.0f, false)); // Gain
         this->outputs.push_back(PortValue::audioBufferValue());
     }
     ~GainNode() override = default;
