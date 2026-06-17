@@ -30,6 +30,7 @@ int main() {
         fprintf(stderr, "Failed to initialize GLAD\n");
         return 1;
     }
+    SDL_GL_SetSwapInterval(1);
 
     glClearColor(0.15f, 0.17f, 0.2f, 1.0f);
 
@@ -91,11 +92,11 @@ int main() {
         audioEngine.world.spawn<OscillatorNode>(),
         audioEngine.world.spawn<OscillatorNode>()
     };
-    NodeId delaysIds[3] = {
-        audioEngine.world.spawn<DelayNode>(),
-        audioEngine.world.spawn<DelayNode>(),
-        audioEngine.world.spawn<DelayNode>()
-    };
+    // NodeId delaysIds[3] = {
+    //     audioEngine.world.spawn<DelayNode>(),
+    //     audioEngine.world.spawn<DelayNode>(),
+    //     audioEngine.world.spawn<DelayNode>()
+    // };
     NodeId reverbsIds[3] = {
         audioEngine.world.spawn<ReverbNode>(),
         audioEngine.world.spawn<ReverbNode>(),
@@ -106,11 +107,11 @@ int main() {
         &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[1])->get()),
         &static_cast<OscillatorNode&>(audioEngine.world.getNode(oscillatorsIds[2])->get())
     };
-    DelayNode *delays[3] = {
-        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[0])->get()),
-        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[1])->get()),
-        &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[2])->get())
-    };
+    // DelayNode *delays[3] = {
+    //     &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[0])->get()),
+    //     &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[1])->get()),
+    //     &static_cast<DelayNode&>(audioEngine.world.getNode(delaysIds[2])->get())
+    // };
     ReverbNode *reverbs[3] = {
         &static_cast<ReverbNode&>(audioEngine.world.getNode(reverbsIds[0])->get()),
         &static_cast<ReverbNode&>(audioEngine.world.getNode(reverbsIds[1])->get()),
@@ -118,14 +119,14 @@ int main() {
     };
     for (size_t i = 0; i < 3; i++) {
         OscillatorNode &oscillator = static_cast<OscillatorNode&>(*oscillators[i]);
-        oscillator.setShape(OscillatorShape::HalfSquare);
+        oscillator.setShape(OscillatorShape::Sine);
         oscillator.setAmplitude(0.15f);
-        delays[i]->setTime(0.3333333f * 0.5f);
-        delays[i]->setMix(0.4f);
+        // delays[i]->setTime(0.3333333f * 0.5f);
+        // delays[i]->setMix(0.4f);
         reverbs[i]->setRoomSize(0.8f);
         reverbs[i]->setMix(0.25f);
-        audioEngine.world.connect(oscillatorsIds[i], OscillatorNode::BUFFER_OUTPUT_ID, delaysIds[i], DelayNode::BUFFER_INPUT_ID);
-        audioEngine.world.connect(delaysIds[i], DelayNode::BUFFER_OUTPUT_ID, reverbsIds[i], ReverbNode::BUFFER_INPUT_ID);
+        // audioEngine.world.connect(oscillatorsIds[i], OscillatorNode::BUFFER_OUTPUT_ID, delaysIds[i], DelayNode::BUFFER_INPUT_ID);
+        audioEngine.world.connect(oscillatorsIds[i], DelayNode::BUFFER_OUTPUT_ID, reverbsIds[i], ReverbNode::BUFFER_INPUT_ID);
         audioEngine.world.connectToOutput(reverbsIds[i], ReverbNode::BUFFER_OUTPUT_ID);
     }
 
@@ -183,7 +184,7 @@ int main() {
         const uint32_t time = SDL_GetTicks();
         const Note (&currentNotes)[3] = progression[(time / 250) % 16];
         for (size_t i = 0; i < 3; i++) {
-            oscillators[i]->setFrequency(calculateNoteFrequency(currentNotes[i].a4Offset));
+            oscillators[i]->setFrequency(calculateNoteFrequency(currentNotes[i].a4Offset - 3 + 12));
             oscillators[i]->setAmplitude(currentNotes[i].velocity * 0.15f);
         }
 

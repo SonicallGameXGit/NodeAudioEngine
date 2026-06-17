@@ -226,6 +226,7 @@ public:
     void audioDeviceAboutToStart(size_t maxAudioSamples) {
         this->maxAudioSamples.emplace(maxAudioSamples);
         for (auto &[_, audioBuffer] : this->audioBuffers) {
+            // FIXME: I really, REALLY don't like these allocations and deallocations, there's should be a way to manage that safely!
             delete[] audioBuffer.left;
             delete[] audioBuffer.right;
             audioBuffer.left = new float[maxAudioSamples];

@@ -152,22 +152,44 @@ Nodes need predictable behavior when inputs are disconnected. This part prevents
 ## Part 7 - MIDI/Event State Bridge [ ]
 
 ### Goal
-Provide a stable path from MIDI/event ingestion to DSP nodes.
+Provide a stable, sample-accurate path from MIDI/event ingestion to DSP nodes.
 
 ### Why this part exists
-Musical interaction requires note/gate/mod sources that are globally visible but real-time safe.
+Musical interaction requires note/gate/mod sources that are globally visible but real-time safe. Block-boundary-only event delivery would accumulate latency proportional to buffer size (up to 10+ms at large buffers), which makes MIDI feel sluggish and ruins timing for fast percussive parts. Sample-accurate delivery keeps latency fixed at 1 sample regardless of buffer size.
 
 ### Required scope
-- MIDI/event state container with clear ownership and update policy
-- ProcessContext carries read-only per-block MIDI/event snapshot
-- Utility nodes can consume note, gate, velocity, and derived frequency
+- **Sample-accurate `MidiEvent`** — each event stores a `sampleOffset` (0 to blockSize-1), allowing nodes to react at the exact sample within a block
+- **Lock-free ring buffer** — accumulates events from the UI/MIDI thread, consumed once per block by the audio thread
+- **Per-block event dispatcher** — drains the ring buffer, sorts events by `sampleOffset`, builds an **event-per-sample lookup** (e.g. `std::array<std::vector<MidiEvent>, MAX_BLOCK_SIZE>` or an index table) so nodes can query "what events happen at sample N?"
+- **`ProcessContext` carries the per-sample event table** — nodes like ADSR iterate sample-by-sample and process events inline at the correct position
+- **Utility nodes** — `MidiInputNode` exposes events as per-sample signal outputs (gate, note number, velocity); `NoteToFrequencyNode` converts note number to frequency
+
+### Implementation notes
+- The per-sample event table must be pre-allocated and reused each block (no allocations on audio thread)
+- Ring buffer uses atomic head/tail with a fixed capacity (e.g. 1024 events) to guarantee no blocking
+- `MidiEvent` struct:
+  ```cpp
+  struct MidiEvent {
+      enum class Type : uint8_t { NoteOn, NoteOff, CC, PitchBend };
+      Type type;
+      uint8_t channel;
+      uint8_t note;
+      float velocity;
+      uint32_t sampleOffset;  // sample index within the current block
+  };
+  ```
+- Event dispatch happens once at the top of `World::process()` — after that, the per-sample table is read-only for all nodes
 
 ### Constraints
 - No blocking synchronization on audio thread
 - State handoff must avoid tearing and undefined partial updates
+- Per-sample event index must be **pre-allocated**, not grown dynamically
+- No heap allocations inside the audio callback
 
 ### Exit criteria
 - MIDI note on/off changes audible output through node graph
+- Events are delivered sample-accurately: a NoteOn at buffer position 200 starts the ADSR attack at sample 200, not at the next block boundary
+- Latency does not increase with buffer size
 - Behavior is deterministic and thread-safe under rapid input
 
 ## Part 8 - Preallocation and Real-Time Hardening [ ]
